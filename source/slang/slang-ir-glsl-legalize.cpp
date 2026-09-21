@@ -1044,6 +1044,16 @@ void createVarLayoutForLegalizedGlobalParam(
     IRVarLayout* varLayout = varLayoutBuilder.build();
     builder->addLayoutDecoration(globalParam, varLayout);
 
+    bool perPrimitive =
+        declarator && declarator->flavor == GlobalVaryingDeclarator::Flavor::meshOutputPrimitives;
+    for (auto info = outerParamInfo; info && !perPrimitive; info = info->next)
+    {
+        auto decorParent = info->outerParam;
+        if (auto field = as<IRStructField>(decorParent))
+            decorParent = field->getKey();
+        perPrimitive = decorParent->findDecoration<IRGLSLPrimitivesRateDecoration>() != nullptr;
+    }
+
     // Traverse the entire access chain for the current leaf var and see if
     // there are interpolation mode decorations along the way.
     // Make sure we respect the decoration on the inner most node.
@@ -1063,7 +1073,7 @@ void createVarLayoutForLegalizedGlobalParam(
         }
     }
 
-    if (declarator && declarator->flavor == GlobalVaryingDeclarator::Flavor::meshOutputPrimitives)
+    if (perPrimitive)
     {
         builder->addDecoration(globalParam, kIROp_GLSLPrimitivesRateDecoration);
     }

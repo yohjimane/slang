@@ -40,6 +40,7 @@ syntax globallycoherent : GloballyCoherentModifier;
 /// distinct per-vertex values.
 ///
 syntax pervertex : PerVertexModifier;
+syntax perprimitive : PerPrimitiveModifier;
 
 /// Modifier to indicate a buffer or texture element type is
 /// backed by data in an unsigned normalized format.

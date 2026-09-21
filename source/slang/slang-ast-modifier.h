@@ -737,6 +737,12 @@ class PerVertexModifier : public InterpolationModeModifier
     FIDDLE(...)
 };
 
+FIDDLE()
+class PerPrimitiveModifier : public Modifier
+{
+    FIDDLE(...)
+};
+
 
 // HLSL `precise` modifier
 FIDDLE()

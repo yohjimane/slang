@@ -3137,6 +3137,10 @@ void addVarDecorations(IRGenContext* context, IRInst* inst, Decl* decl)
         {
             builder->addInterpolationModeDecoration(inst, IRInterpolationMode::PerVertex);
         }
+        else if (as<PerPrimitiveModifier>(mod))
+        {
+            builder->addDecoration(inst, kIROp_GLSLPrimitivesRateDecoration);
+        }
         else if (as<HLSLNoPerspectiveModifier>(mod))
         {
             builder->addInterpolationModeDecoration(inst, IRInterpolationMode::NoPerspective);
