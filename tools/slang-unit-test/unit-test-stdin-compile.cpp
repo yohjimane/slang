@@ -2092,6 +2092,100 @@ static SlangResult _testCompilerOptionHashIsInsertionOrderIndependent()
     return SLANG_OK;
 }
 
+// Link the same composed program with a single `-Xnvrtc <downstreamArg>` link-time option and
+// return its entry-point hash. We use linkWithOptions rather than link so the argument is deposited
+// into the linked component's own option set (ComponentType::m_optionSet), which is the path
+// exercised by #13197 -- distinct from session-level options, which flow through the linkage.
+static SlangResult _getLinkTimeDownstreamArgEntryPointHash(
+    const char* downstreamArg,
+    ComPtr<ISlangBlob>& outHash)
+{
+    ComPtr<slang::IGlobalSession> globalSession;
+    SLANG_RETURN_ON_FAIL(slang_createGlobalSession(SLANG_API_VERSION, globalSession.writeRef()));
+
+    slang::TargetDesc targetDesc = {};
+    targetDesc.format = SLANG_SPIRV;
+
+    slang::SessionDesc sessionDesc = {};
+    sessionDesc.targetCount = 1;
+    sessionDesc.targets = &targetDesc;
+
+    ComPtr<slang::ISession> session;
+    SLANG_RETURN_ON_FAIL(globalSession->createSession(sessionDesc, session.writeRef()));
+
+    ComPtr<slang::IBlob> diagnostics;
+    ComPtr<slang::IModule> module;
+    module = session->loadModuleFromSourceString(
+        "linkTimeDownstreamArgHash",
+        "link-time-downstream-arg-hash.slang",
+        kCoverageCliShader,
+        diagnostics.writeRef());
+    if (!module)
+        return SLANG_FAIL;
+
+    ComPtr<slang::IEntryPoint> entryPoint;
+    SLANG_RETURN_ON_FAIL(module->findAndCheckEntryPoint(
+        "main",
+        SLANG_STAGE_COMPUTE,
+        entryPoint.writeRef(),
+        diagnostics.writeRef()));
+
+    slang::IComponentType* components[] = {module.get(), entryPoint.get()};
+    ComPtr<slang::IComponentType> compositeProgram;
+    SLANG_RETURN_ON_FAIL(session->createCompositeComponentType(
+        components,
+        SLANG_COUNT_OF(components),
+        compositeProgram.writeRef(),
+        diagnostics.writeRef()));
+
+    slang::CompilerOptionEntry linkOptions[] = {
+        _makeString2CompilerOption(
+            slang::CompilerOptionName::DownstreamArgs,
+            "nvrtc",
+            downstreamArg),
+    };
+    ComPtr<slang::IComponentType> linkedProgram;
+    SLANG_RETURN_ON_FAIL(compositeProgram->linkWithOptions(
+        linkedProgram.writeRef(),
+        SLANG_COUNT_OF(linkOptions),
+        linkOptions,
+        diagnostics.writeRef()));
+
+    linkedProgram->getEntryPointHash(0, 0, outHash.writeRef());
+    return outHash ? SLANG_OK : SLANG_FAIL;
+}
+
+// linkWithOptions deposits link-time downstream-compiler arguments (e.g. `-Xnvrtc
+// --gpu-architecture=`) into the linked component's own option set, and those arguments change the
+// emitted target code (the PTX `.target` line, for instance). The entry-point hash is used as a
+// shader-cache key, so it must change when they change; before #13197 the linked component's own
+// option set was never folded into the digest, so two links that differed only in
+// `--gpu-architecture` collided and a cache could serve code built for a different architecture.
+static SlangResult _testLinkTimeDownstreamArgsAffectCompilerOptionHash()
+{
+    ComPtr<ISlangBlob> arch75Hash;
+    SLANG_RETURN_ON_FAIL(
+        _getLinkTimeDownstreamArgEntryPointHash("--gpu-architecture=compute_75", arch75Hash));
+
+    ComPtr<ISlangBlob> arch120Hash;
+    SLANG_RETURN_ON_FAIL(
+        _getLinkTimeDownstreamArgEntryPointHash("--gpu-architecture=compute_120", arch120Hash));
+
+    if (_blobContentEquals(arch75Hash, arch120Hash))
+        return SLANG_FAIL;
+
+    // Control: linking twice with the same argument must produce the same hash, so the difference
+    // above is attributable to the argument and not to any per-link nondeterminism.
+    ComPtr<ISlangBlob> arch75HashRepeat;
+    SLANG_RETURN_ON_FAIL(
+        _getLinkTimeDownstreamArgEntryPointHash("--gpu-architecture=compute_75", arch75HashRepeat));
+
+    if (!_blobContentEquals(arch75Hash, arch75HashRepeat))
+        return SLANG_FAIL;
+
+    return SLANG_OK;
+}
+
 SLANG_UNIT_TEST(SlangcReadFromStdin)
 {
     SLANG_CHECK(SLANG_SUCCEEDED(_testSlangStdin(unitTestContext)));
@@ -2118,6 +2212,7 @@ SLANG_UNIT_TEST(SlangcReadFromStdin)
     SLANG_CHECK(SLANG_SUCCEEDED(_testDuplicateIntOptionReplacesSecondOperand()));
     SLANG_CHECK(SLANG_SUCCEEDED(_testMultiStringOptionHashIsDelimited()));
     SLANG_CHECK(SLANG_SUCCEEDED(_testCompilerOptionHashIsInsertionOrderIndependent()));
+    SLANG_CHECK(SLANG_SUCCEEDED(_testLinkTimeDownstreamArgsAffectCompilerOptionHash()));
 }
 
 SLANG_UNIT_TEST(SlangcCoverageManifestOutputMetalLib)

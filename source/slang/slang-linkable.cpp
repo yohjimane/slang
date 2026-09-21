@@ -308,6 +308,14 @@ SLANG_NO_THROW void SLANG_MCALL ComponentType::getEntryPointHash(
 
     buildHash(builder);
 
+    // linkWithOptions deposits link-time options (e.g. `-Xnvrtc --gpu-architecture=`) into this
+    // component's own option set, and those options drive downstream codegen, so they must affect
+    // the entry-point hash. The virtual buildHash above does not fold them in for composite or
+    // specialized components (only Module::buildHash hashes its own option set), so we add this
+    // component's option set to the digest here. For a component without link-time options the set
+    // is empty and this contributes nothing, leaving existing hashes unchanged.
+    getOptionSet().buildHash(builder);
+
     // Add the name and name override for the specified entry point to the hash.
     auto entryPoint = getEntryPoint(entryPointIndex);
     if (entryPoint)
