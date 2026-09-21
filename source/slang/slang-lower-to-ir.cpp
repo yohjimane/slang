@@ -14990,6 +14990,29 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
                 getBuilder()->addDecoration(irFunc, kIROp_NonDynamicUniformReturnDecoration);
         }
 
+        // The geometry input primitive topology is an entry-point property, so record it on the
+        // function in addition to the parameter it was lowered onto (by addVarDecorations, earlier
+        // in this function, so the parameters and their decorations are already present). The
+        // SPIR-V and GLSL backends read it from the function, and it must survive parameter
+        // legalization, which can erase the parameter entirely (e.g. an empty input struct). The
+        // parameter keeps its copy because the HLSL backend reads the topology from the parameter.
+        //
+        // A geometry entry point has at most one input-primitive parameter, so the first match is
+        // the topology; the findDecoration guard keeps the copy idempotent. (irFunc is statically
+        // IRInst* here, so we walk the entry block directly rather than via IRFunc::getParams().)
+        if (auto firstBlock = irFunc->getFirstBlock();
+            firstBlock && !irFunc->findDecoration<IRGeometryInputPrimitiveTypeDecoration>())
+        {
+            for (auto pp = firstBlock->getFirstParam(); pp; pp = pp->getNextParam())
+            {
+                if (auto geomDecor = pp->findDecoration<IRGeometryInputPrimitiveTypeDecoration>())
+                {
+                    getBuilder()->addDecoration(irFunc, geomDecor->getOp());
+                    break;
+                }
+            }
+        }
+
         verifyComputeDerivativeGroupModifiers(
             getSink(),
             decl->loc,

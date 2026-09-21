@@ -4043,14 +4043,19 @@ void legalizeEntryPointParameterForGLSL(
     // which is what current emit code assumes, but may not be more generally applicable.
     if (auto geomDecor = pp->findDecoration<IRGeometryInputPrimitiveTypeDecoration>())
     {
-        if (!func->findDecoration<IRGeometryInputPrimitiveTypeDecoration>())
+        // The input primitive topology is normally established on the function at lowering time
+        // (see lowerFuncDeclInContext), so it is already present here and a parameter that still
+        // carries it must agree. We still lift it in the `else` for an entry point whose function
+        // reaches this pass without the decoration while a parameter still has it -- e.g. IR
+        // serialized by a Slang build that predates the lowering-time hoist, then linked into this
+        // compile. This mirrors the IRStreamOutputTypeDecoration handling below.
+        if (auto existing = func->findDecoration<IRGeometryInputPrimitiveTypeDecoration>())
         {
-            builder->addDecoration(func, geomDecor->getOp());
+            SLANG_ASSERT(existing->getOp() == geomDecor->getOp());
         }
         else
         {
-            SLANG_UNEXPECTED("Only expected a single parameter to have "
-                             "IRGeometryInputPrimitiveTypeDecoration decoration");
+            builder->addDecoration(func, geomDecor->getOp());
         }
     }
 
