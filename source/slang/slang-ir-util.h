@@ -206,6 +206,23 @@ IRType* getMatrixElementType(IRType* type);
 bool isResourceType(IRType* type);
 bool isOpaqueType(IRType* type, IRType** outLeafOpaqueHandleType);
 
+// True if `addrSpace` maps to a *logical* SPIR-V storage class, i.e. anything other than the
+// PhysicalStorageBuffer class (`AddressSpace::UserPointer`). A pointer in a logical storage class
+// may not be a member of a composite value nor an operand of
+// OpCompositeConstruct/OpCompositeExtract under logical addressing.
+bool isLogicalAddressSpace(AddressSpace addrSpace);
+
+// True if `type` (after unwrapping attributed types) is a pointer in a logical SPIR-V storage
+// class. A pointer with no resolved address space is treated as logical, since it has not been
+// proven to be a physical (PhysicalStorageBuffer) pointer.
+bool isLogicalPointerType(IRType* type);
+
+// True if `type` is, or transitively contains through struct fields, array elements, or tuple
+// elements, a pointer in a logical SPIR-V storage class. A composite whose type satisfies this
+// predicate cannot be materialized as an SSA value for SPIR-V, so reads of it must be projected
+// through addresses instead. Recurses through arrays, which is the nesting that #9062 missed.
+bool typeContainsLogicalPointer(IRType* type);
+
 // True if `type` (after unwrapping attributed types) is a texture or a sampler-state-family type,
 // i.e. one the `spvBindlessTextureNV` descriptor-handle-to-resource conversion can produce. This is
 // also the set of `DescriptorHandle` element types that are represented as `uint64` under that

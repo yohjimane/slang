@@ -3358,6 +3358,121 @@ static void removeUnreachableCodeAfterDiscardForOpKill(
     }
 }
 
+// Return the address that `value` was projected from, if `value` is a load or a chain of field /
+// element projections rooted at a load; otherwise null. The returned address is a fresh
+// field/element address chain (inserted at the builder's current insert location) that is
+// equivalent to taking the address of `value`.
+static IRInst* getProjectedAddress(IRBuilder& builder, IRInst* value)
+{
+    if (auto load = as<IRLoad>(value))
+        return load->getPtr();
+    if (auto fieldExtract = as<IRFieldExtract>(value))
+    {
+        if (auto baseAddr = getProjectedAddress(builder, fieldExtract->getBase()))
+            return builder.emitFieldAddress(baseAddr, fieldExtract->getField());
+    }
+    else if (auto getElement = as<IRGetElement>(value))
+    {
+        if (auto baseAddr = getProjectedAddress(builder, getElement->getOperand(0)))
+            return builder.emitElementAddress(baseAddr, getElement->getOperand(1));
+    }
+    return nullptr;
+}
+
+// Return the load at the root of a field/element projection chain, or null if `value` is not rooted
+// at a load. This is the load whose program point the rewritten read must be placed at, so the
+// value read matches the original whole-aggregate load rather than being sunk past an intervening
+// store or call.
+static IRLoad* getRootLoad(IRInst* value)
+{
+    for (;;)
+    {
+        if (auto load = as<IRLoad>(value))
+            return load;
+        else if (auto fieldExtract = as<IRFieldExtract>(value))
+            value = fieldExtract->getBase();
+        else if (auto getElement = as<IRGetElement>(value))
+            value = getElement->getOperand(0);
+        else
+            return nullptr;
+    }
+}
+
+// Under SPIR-V logical addressing a pointer in a logical storage class may not be a member of a
+// composite value. When a local aggregate transitively carries such a pointer, reading a field or
+// element by loading the whole aggregate and then extracting produces an `OpCompositeExtract` that
+// returns a logical pointer, which is invalid (shader-slang/slang#13206). We rewrite each such
+// projection of a loaded value, `fieldExtract/getElement(load(p), key)`, into a load from the
+// projected address, `load(fieldAddress/elementAddress(p, key))`, so the logical pointer is read
+// directly and never becomes a composite operand; the now-unused whole-aggregate load is removed by
+// the subsequent DCE. `getProjectedAddress` resolves nested projections in a single step, so this
+// needs no fixpoint.
+//
+// The rewritten load is placed at the *root load's* program point, not the projection's: loading
+// the whole aggregate then extracting a field reads the field as of the load, so reading it through
+// its address must happen at that same point to stay value-preserving when a store, call, or
+// barrier sits between the load and the projection. We run this after `specializeAddressSpace` so
+// every pointer already has a concrete address space to classify.
+static void legalizeLogicalPointerCompositesForSPIRV(IRModule* module)
+{
+    IRBuilder builder(module);
+    for (auto globalInst : module->getGlobalInsts())
+    {
+        auto code = as<IRGlobalValueWithCode>(globalInst);
+        if (!code)
+            continue;
+        for (auto block : code->getBlocks())
+        {
+            IRInst* nextInst = nullptr;
+            for (auto inst = block->getFirstInst(); inst; inst = nextInst)
+            {
+                nextInst = inst->getNextInst();
+
+                IRInst* base = nullptr;
+                IRInst* fieldKey = nullptr;
+                IRInst* elementIndex = nullptr;
+                if (auto fieldExtract = as<IRFieldExtract>(inst))
+                {
+                    base = fieldExtract->getBase();
+                    fieldKey = fieldExtract->getField();
+                }
+                else if (auto getElement = as<IRGetElement>(inst))
+                {
+                    base = getElement->getOperand(0);
+                    elementIndex = getElement->getOperand(1);
+                }
+                else
+                {
+                    continue;
+                }
+
+                // Only touch projections out of an aggregate that actually carries a logical
+                // pointer, so ordinary struct/array access is left untouched.
+                if (!typeContainsLogicalPointer(base->getDataType()))
+                    continue;
+
+                // The projected value must be rooted at a load for there to be an address to read
+                // from. If it is not (e.g. a function parameter or call result), there is nothing
+                // to redirect; the emit-time check rejects it with a diagnostic (Approach B).
+                auto rootLoad = getRootLoad(base);
+                if (!rootLoad)
+                    continue;
+
+                // Build the address chain and the replacement load at the root load's point so the
+                // value read is the one at that point (see the note above), not sunk to the
+                // projection site.
+                builder.setInsertBefore(rootLoad);
+                auto baseAddr = getProjectedAddress(builder, base);
+                auto elementAddr = fieldKey ? builder.emitFieldAddress(baseAddr, fieldKey)
+                                            : builder.emitElementAddress(baseAddr, elementIndex);
+                auto loaded = builder.emitLoad(elementAddr);
+                inst->replaceUsesWith(loaded);
+                inst->removeAndDeallocate();
+            }
+        }
+    }
+}
+
 void legalizeIRForSPIRV(
     SPIRVEmitSharedContext* context,
     IRModule* module,
@@ -3366,6 +3481,7 @@ void legalizeIRForSPIRV(
 {
     SLANG_UNUSED(entryPoints);
     legalizeSPIRV(context, module, codeGenContext);
+    legalizeLogicalPointerCompositesForSPIRV(module);
     simplifyIRForSpirvLegalization(context->m_targetProgram, codeGenContext->getSink(), module);
 
     // Remove unreachable code after discard for SPIRV versions that emit OpKill.

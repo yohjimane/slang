@@ -6118,6 +6118,13 @@ err(
     span { loc = "location", message = "'~inst:IRInst': use of pointer with inconsistent address space." }
 )
 
+err(
+    "logical-pointer-in-composite",
+    58004,
+    "logical pointer in composite for SPIR-V",
+    span { loc = "location", message = "'~inst:IRInst': a pointer in a logical storage class cannot be a member of a composite value when targeting SPIR-V; keep the aggregate in memory and access the pointer field through its address, or use a physical ('PhysicalStorageBuffer') pointer." }
+)
+
 -- Autodiff checkpoint reporting notes (-1)
 
 standalone_note(
